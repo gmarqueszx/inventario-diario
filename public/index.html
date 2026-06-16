@@ -342,11 +342,19 @@
         <option value="diff">⚠️ Divergente</option>
         <option value="pending">⏳ Pendente</option>
       </select>
+      <select id="filter-priority">
+        <option value="">Todas as prioridades</option>
+        <option value="alta">🔴 Alta</option>
+        <option value="media">🟡 Média</option>
+        <option value="baixa">🟢 Baixa</option>
+        <option value="none">— Sem prioridade</option>
+      </select>
     </div>
     <div class="table-wrapper">
       <table id="main-table">
         <thead>
           <tr>
+            <th data-col="priority" style="min-width:100px">Prioridade <span class="sort-arrow">↑</span></th>
             <th data-col="codigo">Cód. <span class="sort-arrow"></span></th>
             <th data-col="produto" style="min-width:200px">Produto <span class="sort-arrow"></span></th>
             <th data-col="categoria">Categoria <span class="sort-arrow"></span></th>
@@ -479,8 +487,10 @@ let countsData  = {};
 let rows        = [];
 let sortCol     = 'valor_total';
 let sortDir     = -1;
-let saveTimer   = null;
+let saveTimer        = null;
+let prioritySaveTimer = null;
 let pendingExcelData = null;
+let prioritiesData   = {};
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 function todayLabel() {
@@ -652,18 +662,20 @@ document.getElementById('btn-logout').addEventListener('click', async () => {
 // ─── Main data load ──────────────────────────────────────────────────────────
 async function loadMainData() {
   try {
-    const [imp, cnt] = await Promise.all([
+    const [imp, cnt, pri] = await Promise.all([
       apiGet(`/api/import?date=${TODAY}`),
-      apiGet(`/api/counts?date=${TODAY}`)
+      apiGet(`/api/counts?date=${TODAY}`),
+      apiGet('/api/priorities')
     ]);
-    importData = imp || null;
-    countsData = cnt || {};
+    importData    = imp || null;
+    countsData    = cnt || {};
+    prioritiesData = pri || {};
   } catch (err) {
     if (err.message !== 'unauthorized') console.error(err);
     importData = null; countsData = {};
   }
   buildRows();
-  sortCol = 'valor_total'; sortDir = -1;
+  sortCol = 'priority'; sortDir = 1;
   render();
 }
 
@@ -673,17 +685,34 @@ function buildRows() {
     const imp = importData?.products?.[cat.codigo];
     const estoque = imp !== undefined ? imp.estoque : 0;
     const contagem = countsData[cat.codigo] !== undefined ? countsData[cat.codigo] : null;
-    return { codigo: cat.codigo, produto: cat.produto, categoria: cat.categoria, custo: cat.custo, estoque, valor_total: cat.custo * estoque, contagem };
+    const priority = prioritiesData[cat.codigo] ?? null;
+    return { codigo: cat.codigo, produto: cat.produto, categoria: cat.categoria, custo: cat.custo, estoque, valor_total: cat.custo * estoque, contagem, priority };
   });
 }
 
 // ─── Sort / filter ───────────────────────────────────────────────────────────
+const PRIORITY_ORDER = { alta: 1, media: 2, baixa: 3 };
+function priorityOrder(p) { return PRIORITY_ORDER[p] ?? 99; }
+
 function sortRows() {
   rows.sort((a, b) => {
-    let va = a[sortCol], vb = b[sortCol];
-    if (typeof va === 'string') va = va.toLowerCase();
-    if (typeof vb === 'string') vb = vb.toLowerCase();
-    return va < vb ? -sortDir : va > vb ? sortDir : 0;
+    let va, vb;
+    if (sortCol === 'priority') {
+      va = priorityOrder(a.priority);
+      vb = priorityOrder(b.priority);
+    } else {
+      va = a[sortCol]; vb = b[sortCol];
+      if (typeof va === 'string') va = va.toLowerCase();
+      if (typeof vb === 'string') vb = vb.toLowerCase();
+    }
+    const primary = va < vb ? -sortDir : va > vb ? sortDir : 0;
+    if (primary !== 0) return primary;
+    // desempate: prioridade asc, depois valor_total desc
+    if (sortCol !== 'priority') {
+      const pa = priorityOrder(a.priority), pb = priorityOrder(b.priority);
+      if (pa !== pb) return pa - pb;
+    }
+    return b.valor_total - a.valor_total;
   });
 }
 function rowStatus(row) {
@@ -691,13 +720,16 @@ function rowStatus(row) {
   return row.contagem === row.estoque ? 'ok' : 'diff';
 }
 function applyFilters() {
-  const search = document.getElementById('filter-search').value.toLowerCase().trim();
-  const cat    = document.getElementById('filter-categoria').value;
-  const status = document.getElementById('filter-status').value;
+  const search   = document.getElementById('filter-search').value.toLowerCase().trim();
+  const cat      = document.getElementById('filter-categoria').value;
+  const status   = document.getElementById('filter-status').value;
+  const priority = document.getElementById('filter-priority').value;
   return rows.filter(r => {
     if (search && !r.produto.toLowerCase().includes(search) && !r.codigo.toLowerCase().includes(search)) return false;
     if (cat    && r.categoria !== cat) return false;
     if (status && rowStatus(r) !== status) return false;
+    if (priority === 'none' && r.priority !== null) return false;
+    if (priority && priority !== 'none' && r.priority !== priority) return false;
     return true;
   });
 }
@@ -751,7 +783,7 @@ function renderTable() {
   const filtered = applyFilters();
   const tbody = document.getElementById('table-body');
   if (!filtered.length) {
-    tbody.innerHTML = `<tr><td colspan="9" class="empty-state"><div class="empty-icon">🔍</div>Nenhum produto com os filtros selecionados.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="10" class="empty-state"><div class="empty-icon">🔍</div>Nenhum produto com os filtros selecionados.</td></tr>`;
     return;
   }
   tbody.innerHTML = filtered.map(row => {
@@ -762,6 +794,7 @@ function renderTable() {
     if (diff !== null) diffHtml = diff > 0 ? `<span class="diff-pos">+${diff}</span>` : diff < 0 ? `<span class="diff-neg">${diff}</span>` : `<span class="diff-zero">0</span>`;
     const badgeHtml = st === 'ok' ? '<span class="badge badge-ok">✓ Correto</span>' : st === 'diff' ? '<span class="badge badge-diff">⚠ Diverge</span>' : '<span class="badge badge-pending">Pendente</span>';
     return `<tr class="${rowClass}" data-codigo="${row.codigo}">
+      <td class="priority-cell">${priorityBadgeHtml(row.priority, row.codigo)}</td>
       <td class="td-codigo">${row.codigo}</td>
       <td class="td-produto">${row.produto}<small>${row.categoria}</small></td>
       <td>${row.categoria}</td>
@@ -785,8 +818,9 @@ function renderTableRow(tr, row) {
   if (diff !== null) diffHtml = diff > 0 ? `<span class="diff-pos">+${diff}</span>` : diff < 0 ? `<span class="diff-neg">${diff}</span>` : `<span class="diff-zero">0</span>`;
   const badgeHtml = st === 'ok' ? '<span class="badge badge-ok">✓ Correto</span>' : st === 'diff' ? '<span class="badge badge-diff">⚠ Diverge</span>' : '<span class="badge badge-pending">Pendente</span>';
   const tds = tr.querySelectorAll('td');
-  tds[7].innerHTML = diffHtml;
-  tds[8].innerHTML = badgeHtml;
+  tds[0].innerHTML = priorityBadgeHtml(row.priority, row.codigo); // priority column shifted
+  tds[8].innerHTML = diffHtml;
+  tds[9].innerHTML = badgeHtml;
 }
 
 // ─── Count input ─────────────────────────────────────────────────────────────
@@ -897,6 +931,7 @@ function populateCategoryFilter() {
 document.getElementById('filter-search').addEventListener('input', renderTable);
 document.getElementById('filter-categoria').addEventListener('change', renderTable);
 document.getElementById('filter-status').addEventListener('change', renderTable);
+document.getElementById('filter-priority').addEventListener('change', renderTable);
 
 // ─── History modal ────────────────────────────────────────────────────────────
 document.getElementById('btn-history').addEventListener('click', openHistoryModal);
@@ -1152,6 +1187,42 @@ document.getElementById('do-confirm').addEventListener('click', async () => {
 ['history-modal','mapping-modal','confirm-modal','performance-modal','users-modal'].forEach(id => {
   document.getElementById(id).addEventListener('click', function (e) { if (e.target === this) this.classList.add('hidden'); });
 });
+
+// ─── Priority helpers ────────────────────────────────────────────────────────
+function priorityBadgeHtml(priority, codigo) {
+  const isAdmin = currentSession?.role === 'admin';
+  const config = {
+    alta:  { label: '🔴 Alta',  style: 'background:#fff5f5;color:#c53030;border:1px solid #feb2b2' },
+    media: { label: '🟡 Média', style: 'background:#fffde7;color:#744210;border:1px solid #f6e05e' },
+    baixa: { label: '🟢 Baixa', style: 'background:#f0fff4;color:#276749;border:1px solid #9ae6b4' },
+  };
+  const p = priority ? config[priority] : null;
+  const style  = p ? p.style : 'background:#edf2f7;color:#718096;border:1px solid #e2e8f0';
+  const label  = p ? p.label : '—';
+  const cursor = isAdmin ? 'cursor:pointer;' : '';
+  const title  = isAdmin ? 'title="Clique para alterar prioridade"' : '';
+  const click  = isAdmin ? `onclick="cyclePriority('${codigo}')"` : '';
+  return `<span class="badge" style="${cursor}${style}" ${title} ${click}>${label}</span>`;
+}
+
+function cyclePriority(codigo) {
+  const cycle = { alta: 'media', media: 'baixa', baixa: null };
+  const current = prioritiesData[codigo] ?? null;
+  const next = current === null ? 'alta' : cycle[current];
+  if (next === null) delete prioritiesData[codigo];
+  else prioritiesData[codigo] = next;
+  const row = rows.find(r => r.codigo === codigo);
+  if (row) row.priority = prioritiesData[codigo] ?? null;
+  const cell = document.querySelector(`tr[data-codigo="${codigo}"] .priority-cell`);
+  if (cell) cell.innerHTML = priorityBadgeHtml(prioritiesData[codigo] ?? null, codigo);
+  clearTimeout(prioritySaveTimer);
+  prioritySaveTimer = setTimeout(savePriorities, 1000);
+}
+
+async function savePriorities() {
+  try { await apiPost('/api/priorities', prioritiesData); showToast('✓ Prioridades salvas'); }
+  catch (err) { console.error('savePriorities', err); }
+}
 
 // ─── Init ────────────────────────────────────────────────────────────────────
 async function init() {
