@@ -678,10 +678,9 @@ function buildRows() {
 }
 
 // ─── Sort / filter ───────────────────────────────────────────────────────────
-function sortRows(col) {
-  if (sortCol === col) sortDir *= -1; else { sortCol = col; sortDir = -1; }
+function sortRows() {
   rows.sort((a, b) => {
-    let va = a[col], vb = b[col];
+    let va = a[sortCol], vb = b[sortCol];
     if (typeof va === 'string') va = va.toLowerCase();
     if (typeof vb === 'string') vb = vb.toLowerCase();
     return va < vb ? -sortDir : va > vb ? sortDir : 0;
@@ -704,7 +703,7 @@ function applyFilters() {
 }
 
 // ─── Render ──────────────────────────────────────────────────────────────────
-function render() { sortRows(sortCol); renderBanner(); renderStats(); renderSortHeaders(); renderTable(); }
+function render() { sortRows(); renderBanner(); renderStats(); renderSortHeaders(); renderTable(); }
 
 function renderBanner() {
   const el = document.getElementById('banner');
@@ -881,7 +880,12 @@ document.getElementById('confirm-mapping').addEventListener('click', async () =>
 
 // ─── Sort headers ─────────────────────────────────────────────────────────────
 document.querySelectorAll('th[data-col]').forEach(th => {
-  th.addEventListener('click', () => { sortCol = th.dataset.col; sortDir *= -1; render(); });
+  th.addEventListener('click', () => {
+    const col = th.dataset.col;
+    if (sortCol === col) sortDir *= -1;
+    else { sortCol = col; sortDir = -1; }
+    render();
+  });
 });
 
 // ─── Filters ─────────────────────────────────────────────────────────────────
