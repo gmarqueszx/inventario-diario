@@ -243,6 +243,10 @@
 
   hr.modal-divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
 
+  /* ── Priority rows modal ── */
+  .priority-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .priority-row:last-child { border-bottom: none; }
+
   @media (max-width: 768px) {
     .main { padding: 12px; }
     .stats { gap: 8px; }
@@ -322,6 +326,7 @@
         <input type="file" id="excel-input" accept=".xlsx,.xls" style="display:none">
       </label>
       <button class="btn btn-outline btn-sm" id="btn-history">📋 Histórico</button>
+      <button class="btn btn-outline btn-sm hidden admin-only" id="btn-priorities">🎯 Prioridades</button>
       <button class="btn btn-outline btn-sm hidden admin-only" id="btn-performance">📊 Desempenho</button>
       <button class="btn btn-outline btn-sm hidden admin-only" id="btn-users">👥 Usuários</button>
       <button class="btn btn-success btn-sm" id="btn-finish">✅ Finalizar</button>
@@ -373,6 +378,23 @@
 </div>
 
 <!-- ── Modals ──────────────────────────────────────────────────────────── -->
+
+<!-- Priorities (admin) -->
+<div class="modal-backdrop hidden" id="priorities-modal">
+  <div class="modal" style="max-width:460px">
+    <div class="modal-header">
+      <h2>🎯 Prioridades por Categoria</h2>
+      <button class="modal-close" id="close-priorities">×</button>
+    </div>
+    <div class="modal-body">
+      <p style="color:var(--muted);font-size:13px;margin-bottom:16px">
+        Clique no badge para ciclar: <strong>— → 🔴 Alta → 🟡 Média → 🟢 Baixa → —</strong><br>
+        A prioridade se aplica a todos os produtos da categoria.
+      </p>
+      <div id="priorities-list"></div>
+    </div>
+  </div>
+</div>
 
 <!-- History -->
 <div class="modal-backdrop hidden" id="history-modal">
@@ -685,7 +707,7 @@ function buildRows() {
     const imp = importData?.products?.[cat.codigo];
     const estoque = imp !== undefined ? imp.estoque : 0;
     const contagem = countsData[cat.codigo] !== undefined ? countsData[cat.codigo] : null;
-    const priority = prioritiesData[cat.codigo] ?? null;
+    const priority = prioritiesData[cat.categoria] ?? null;
     return { codigo: cat.codigo, produto: cat.produto, categoria: cat.categoria, custo: cat.custo, estoque, valor_total: cat.custo * estoque, contagem, priority };
   });
 }
@@ -794,7 +816,7 @@ function renderTable() {
     if (diff !== null) diffHtml = diff > 0 ? `<span class="diff-pos">+${diff}</span>` : diff < 0 ? `<span class="diff-neg">${diff}</span>` : `<span class="diff-zero">0</span>`;
     const badgeHtml = st === 'ok' ? '<span class="badge badge-ok">✓ Correto</span>' : st === 'diff' ? '<span class="badge badge-diff">⚠ Diverge</span>' : '<span class="badge badge-pending">Pendente</span>';
     return `<tr class="${rowClass}" data-codigo="${row.codigo}">
-      <td class="priority-cell">${priorityBadgeHtml(row.priority, row.codigo)}</td>
+      <td class="priority-cell">${priorityBadgeHtml(row.priority)}</td>
       <td class="td-codigo">${row.codigo}</td>
       <td class="td-produto">${row.produto}<small>${row.categoria}</small></td>
       <td>${row.categoria}</td>
@@ -818,7 +840,6 @@ function renderTableRow(tr, row) {
   if (diff !== null) diffHtml = diff > 0 ? `<span class="diff-pos">+${diff}</span>` : diff < 0 ? `<span class="diff-neg">${diff}</span>` : `<span class="diff-zero">0</span>`;
   const badgeHtml = st === 'ok' ? '<span class="badge badge-ok">✓ Correto</span>' : st === 'diff' ? '<span class="badge badge-diff">⚠ Diverge</span>' : '<span class="badge badge-pending">Pendente</span>';
   const tds = tr.querySelectorAll('td');
-  tds[0].innerHTML = priorityBadgeHtml(row.priority, row.codigo); // priority column shifted
   tds[8].innerHTML = diffHtml;
   tds[9].innerHTML = badgeHtml;
 }
@@ -1184,39 +1205,68 @@ document.getElementById('do-confirm').addEventListener('click', async () => {
 });
 
 // ─── Close modals on backdrop click ──────────────────────────────────────────
-['history-modal','mapping-modal','confirm-modal','performance-modal','users-modal'].forEach(id => {
+document.getElementById('btn-priorities').addEventListener('click', () => {
+  document.getElementById('priorities-modal').classList.remove('hidden');
+  renderPrioritiesList();
+});
+document.getElementById('close-priorities').addEventListener('click', () =>
+  document.getElementById('priorities-modal').classList.add('hidden'));
+
+['history-modal','mapping-modal','confirm-modal','performance-modal','users-modal','priorities-modal'].forEach(id => {
   document.getElementById(id).addEventListener('click', function (e) { if (e.target === this) this.classList.add('hidden'); });
 });
 
 // ─── Priority helpers ────────────────────────────────────────────────────────
-function priorityBadgeHtml(priority, codigo) {
-  const isAdmin = currentSession?.role === 'admin';
+function priorityBadgeHtml(priority) {
   const config = {
     alta:  { label: '🔴 Alta',  style: 'background:#fff5f5;color:#c53030;border:1px solid #feb2b2' },
     media: { label: '🟡 Média', style: 'background:#fffde7;color:#744210;border:1px solid #f6e05e' },
     baixa: { label: '🟢 Baixa', style: 'background:#f0fff4;color:#276749;border:1px solid #9ae6b4' },
   };
   const p = priority ? config[priority] : null;
-  const style  = p ? p.style : 'background:#edf2f7;color:#718096;border:1px solid #e2e8f0';
-  const label  = p ? p.label : '—';
-  const cursor = isAdmin ? 'cursor:pointer;' : '';
-  const title  = isAdmin ? 'title="Clique para alterar prioridade"' : '';
-  const click  = isAdmin ? `onclick="cyclePriority('${codigo}')"` : '';
-  return `<span class="badge" style="${cursor}${style}" ${title} ${click}>${label}</span>`;
+  const style = p ? p.style : 'background:#edf2f7;color:#718096;border:1px solid #e2e8f0';
+  const label = p ? p.label : '—';
+  return `<span class="badge" style="${style}">${label}</span>`;
 }
 
-function cyclePriority(codigo) {
+function cyclePriority(categoria) {
   const cycle = { alta: 'media', media: 'baixa', baixa: null };
-  const current = prioritiesData[codigo] ?? null;
+  const current = prioritiesData[categoria] ?? null;
   const next = current === null ? 'alta' : cycle[current];
-  if (next === null) delete prioritiesData[codigo];
-  else prioritiesData[codigo] = next;
-  const row = rows.find(r => r.codigo === codigo);
-  if (row) row.priority = prioritiesData[codigo] ?? null;
-  const cell = document.querySelector(`tr[data-codigo="${codigo}"] .priority-cell`);
-  if (cell) cell.innerHTML = priorityBadgeHtml(prioritiesData[codigo] ?? null, codigo);
+  if (next === null) delete prioritiesData[categoria];
+  else prioritiesData[categoria] = next;
+  // Atualiza todas as linhas da categoria
+  rows.forEach(r => { if (r.categoria === categoria) r.priority = prioritiesData[categoria] ?? null; });
+  // Atualiza os badges na tabela
+  document.querySelectorAll('.priority-cell').forEach(cell => {
+    const codigo = cell.closest('tr')?.dataset.codigo;
+    const row = rows.find(r => r.codigo === codigo);
+    if (row && row.categoria === categoria) cell.innerHTML = priorityBadgeHtml(row.priority);
+  });
+  renderPrioritiesList();
   clearTimeout(prioritySaveTimer);
   prioritySaveTimer = setTimeout(savePriorities, 1000);
+}
+
+function renderPrioritiesList() {
+  const cats = [...new Set(CATALOG.map(p => p.categoria))].sort();
+  const el = document.getElementById('priorities-list');
+  if (!el) return;
+  el.innerHTML = cats.map(cat => {
+    const priority = prioritiesData[cat] ?? null;
+    const count = CATALOG.filter(p => p.categoria === cat).length;
+    const catEsc = cat.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    return `<div class="priority-row">
+      <div>
+        <div style="font-weight:600;font-size:13px">${cat}</div>
+        <div style="font-size:11px;color:var(--muted)">${count} produto${count !== 1 ? 's' : ''}</div>
+      </div>
+      <span onclick="cyclePriority('${catEsc}')" style="cursor:pointer" title="Clique para alterar">
+        ${priorityBadgeHtml(priority)}
+        <span style="font-size:10px;color:var(--muted);margin-left:2px">▶</span>
+      </span>
+    </div>`;
+  }).join('');
 }
 
 async function savePriorities() {
