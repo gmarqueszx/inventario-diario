@@ -5,48 +5,44 @@ const redis = new Redis({
   token: process.env.UPSTASH_REDIS_REST_TOKEN,
 });
 
-export const handler = async (event) => {
-  const headers = {
-    'Content-Type': 'application/json',
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
-  };
+const h = {
+  'Content-Type': 'application/json',
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, x-session-token',
+};
+const ok  = (data) => ({ statusCode: 200, headers: h, body: JSON.stringify(data) });
+const err = (code, msg) => ({ statusCode: code, headers: h, body: JSON.stringify({ error: msg }) });
 
-  if (event.httpMethod === 'OPTIONS') {
-    return { statusCode: 200, headers, body: '' };
-  }
+async function getSession(event) {
+  const token = (event.headers['x-session-token'] || '').trim();
+  if (!token) return null;
+  return await redis.get(`session:${token}`);
+}
+
+export const handler = async (event) => {
+  if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers: h, body: '' };
+
+  const session = await getSession(event);
+  if (!session) return err(401, 'unauthorized');
 
   const params = new URLSearchParams(event.rawQuery || '');
   const date = params.get('date');
-
-  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return {
-      statusCode: 400,
-      headers,
-      body: JSON.stringify({ error: 'date param required (YYYY-MM-DD)' }),
-    };
-  }
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return err(400, 'date param required (YYYY-MM-DD)');
 
   const key = `import:${date}`;
 
   if (event.httpMethod === 'GET') {
     const data = await redis.get(key);
-    return {
-      statusCode: 200,
-      headers,
-      body: JSON.stringify(data ?? null),
-    };
+    return ok(data ?? null);
   }
 
   if (event.httpMethod === 'POST') {
     const body = event.body ? JSON.parse(event.body) : null;
-    if (!body || typeof body !== 'object') {
-      return { statusCode: 400, headers, body: JSON.stringify({ error: 'invalid body' }) };
-    }
+    if (!body || typeof body !== 'object') return err(400, 'invalid body');
     await redis.set(key, body, { ex: 7 * 24 * 60 * 60 });
-    return { statusCode: 200, headers, body: JSON.stringify({ ok: true }) };
+    return ok({ ok: true });
   }
 
-  return { statusCode: 405, headers, body: JSON.stringify({ error: 'method not allowed' }) };
+  return err(405, 'method not allowed');
 };
