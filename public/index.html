@@ -369,6 +369,7 @@
             <th class="td-num">Contagem Física</th>
             <th class="td-diff">Diferença</th>
             <th>Status</th>
+            <th data-col="lastCounted">Última Contagem <span class="sort-arrow"></span></th>
           </tr>
         </thead>
         <tbody id="table-body"></tbody>
@@ -513,6 +514,7 @@ let saveTimer        = null;
 let prioritySaveTimer = null;
 let pendingExcelData = null;
 let prioritiesData   = {};
+let lastCountedMap   = {}; // { codigo: 'YYYY-MM-DD' }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 function todayLabel() {
@@ -684,14 +686,16 @@ document.getElementById('btn-logout').addEventListener('click', async () => {
 // ─── Main data load ──────────────────────────────────────────────────────────
 async function loadMainData() {
   try {
-    const [imp, cnt, pri] = await Promise.all([
+    const [imp, cnt, pri, hist] = await Promise.all([
       apiGet(`/api/import?date=${TODAY}`),
       apiGet(`/api/counts?date=${TODAY}`),
-      apiGet('/api/priorities')
+      apiGet('/api/priorities'),
+      apiGet('/api/history')
     ]);
     importData    = imp || null;
     countsData    = cnt || {};
     prioritiesData = pri || {};
+    buildLastCountedMap(hist || []);
   } catch (err) {
     if (err.message !== 'unauthorized') console.error(err);
     importData = null; countsData = {};
@@ -701,14 +705,28 @@ async function loadMainData() {
   render();
 }
 
+// ─── Last counted map ────────────────────────────────────────────────────────
+function buildLastCountedMap(history) {
+  lastCountedMap = {};
+  // history já vem do mais recente para o mais antigo
+  history.forEach(entry => {
+    (entry.items || []).forEach(item => {
+      if (item.contagem !== null && item.contagem !== undefined && !lastCountedMap[item.codigo]) {
+        lastCountedMap[item.codigo] = entry.date;
+      }
+    });
+  });
+}
+
 // ─── Build rows ──────────────────────────────────────────────────────────────
 function buildRows() {
   rows = CATALOG.map(cat => {
     const imp = importData?.products?.[cat.codigo];
     const estoque = imp !== undefined ? imp.estoque : 0;
     const contagem = countsData[cat.codigo] !== undefined ? countsData[cat.codigo] : null;
-    const priority = prioritiesData[cat.categoria] ?? null;
-    return { codigo: cat.codigo, produto: cat.produto, categoria: cat.categoria, custo: cat.custo, estoque, valor_total: cat.custo * estoque, contagem, priority };
+    const priority    = prioritiesData[cat.categoria] ?? null;
+    const lastCounted = lastCountedMap[cat.codigo] ?? null;
+    return { codigo: cat.codigo, produto: cat.produto, categoria: cat.categoria, custo: cat.custo, estoque, valor_total: cat.custo * estoque, contagem, priority, lastCounted };
   });
 }
 
@@ -722,6 +740,9 @@ function sortRows() {
     if (sortCol === 'priority') {
       va = priorityOrder(a.priority);
       vb = priorityOrder(b.priority);
+    } else if (sortCol === 'lastCounted') {
+      va = a.lastCounted ?? '0000-00-00';
+      vb = b.lastCounted ?? '0000-00-00';
     } else {
       va = a[sortCol]; vb = b[sortCol];
       if (typeof va === 'string') va = va.toLowerCase();
@@ -805,7 +826,7 @@ function renderTable() {
   const filtered = applyFilters();
   const tbody = document.getElementById('table-body');
   if (!filtered.length) {
-    tbody.innerHTML = `<tr><td colspan="10" class="empty-state"><div class="empty-icon">🔍</div>Nenhum produto com os filtros selecionados.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="11" class="empty-state"><div class="empty-icon">🔍</div>Nenhum produto com os filtros selecionados.</td></tr>`;
     return;
   }
   tbody.innerHTML = filtered.map(row => {
@@ -826,6 +847,9 @@ function renderTable() {
       <td class="td-num"><input class="count-input" type="number" min="0" step="1" value="${row.contagem !== null ? row.contagem : ''}" placeholder="—" data-codigo="${row.codigo}"></td>
       <td class="td-diff">${diffHtml}</td>
       <td>${badgeHtml}</td>
+      <td style="white-space:nowrap;font-size:12px;color:${row.lastCounted ? 'var(--text)' : 'var(--muted)'}">
+        ${row.lastCounted ? new Date(row.lastCounted + 'T12:00:00').toLocaleDateString('pt-BR') : 'Sem Registro'}
+      </td>
     </tr>`;
   }).join('');
   tbody.querySelectorAll('.count-input').forEach(inp => inp.addEventListener('input', onCountInput));
@@ -1198,7 +1222,15 @@ document.getElementById('do-confirm').addEventListener('click', async () => {
       items: rows.map(r => ({ codigo: r.codigo, produto: r.produto, categoria: r.categoria, custo: r.custo, estoque: r.estoque, valor_total: r.valor_total, contagem: r.contagem }))
     };
     await apiPost('/api/history', snapshot);
+    // Atualiza mapa local de última contagem com os itens finalizados hoje
+    rows.forEach(r => {
+      if (r.contagem !== null && (!lastCountedMap[r.codigo] || lastCountedMap[r.codigo] < TODAY)) {
+        lastCountedMap[r.codigo] = TODAY;
+        r.lastCounted = TODAY;
+      }
+    });
     document.getElementById('confirm-modal').classList.add('hidden');
+    renderTable();
     showToast('✓ Conferência salva no histórico!');
   } catch (err) { alert('Erro: ' + err.message); }
   finally { btn.disabled = false; btn.textContent = 'Salvar no Histórico'; }
