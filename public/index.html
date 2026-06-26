@@ -247,6 +247,20 @@
   .priority-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--border); }
   .priority-row:last-child { border-bottom: none; }
 
+  /* ── Relatório de Estoque ── */
+  .rel-cat-header { font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--muted); padding: 10px 0 4px; margin-top: 14px; border-bottom: 2px solid var(--border); }
+  .rel-cat-header:first-child { margin-top: 0; }
+  .rel-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid #f0f0f0; }
+  .rel-row:last-child { border-bottom: none; }
+  .rel-name { flex: 1; min-width: 0; }
+  .rel-name input { width: 100%; border: 1px solid transparent; border-radius: 4px; padding: 4px 7px; font-size: 13px; font-family: inherit; background: transparent; color: var(--text); transition: all 0.12s; }
+  .rel-name input:hover { border-color: var(--border); background: var(--bg); }
+  .rel-name input:focus { outline: none; border-color: var(--primary); background: #fff; }
+  .rel-name-static { font-size: 13px; padding: 4px 7px; }
+  .rel-auto-tag { font-size: 10px; color: var(--muted); background: #edf2f7; border-radius: 4px; padding: 1px 4px; flex-shrink: 0; }
+  .rel-qty { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 14px; white-space: nowrap; min-width: 36px; text-align: right; flex-shrink: 0; }
+  .rel-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+
   @media (max-width: 768px) {
     .main { padding: 12px; }
     .stats { gap: 8px; }
@@ -326,6 +340,7 @@
         <input type="file" id="excel-input" accept=".xlsx,.xls" style="display:none">
       </label>
       <button class="btn btn-outline btn-sm" id="btn-history">📋 Histórico</button>
+      <button class="btn btn-outline btn-sm" id="btn-relatorio">📄 Relatório</button>
       <button class="btn btn-outline btn-sm hidden admin-only" id="btn-priorities">🎯 Prioridades</button>
       <button class="btn btn-outline btn-sm hidden admin-only" id="btn-performance">📊 Desempenho</button>
       <button class="btn btn-outline btn-sm hidden admin-only" id="btn-users">👥 Usuários</button>
@@ -393,6 +408,26 @@
         A prioridade se aplica a todos os produtos da categoria.
       </p>
       <div id="priorities-list"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Relatório de Estoque -->
+<div class="modal-backdrop hidden" id="relatorio-modal">
+  <div class="modal" style="max-width:640px">
+    <div class="modal-header">
+      <h2>📄 Relatório de Estoque</h2>
+      <button class="modal-close" id="close-relatorio">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="rel-toolbar">
+        <button class="btn btn-outline btn-sm hidden admin-only" id="btn-rel-autonome">↺ Resetar nomes automáticos</button>
+        <button class="btn btn-primary btn-sm" id="btn-rel-copy">📋 Copiar texto</button>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;margin-left:auto">
+          <input type="checkbox" id="rel-show-zeros"> Incluir itens com estoque zero
+        </label>
+      </div>
+      <div id="relatorio-body"></div>
     </div>
   </div>
 </div>
@@ -512,8 +547,10 @@ let sortCol     = 'valor_total';
 let sortDir     = -1;
 let saveTimer        = null;
 let prioritySaveTimer = null;
+let snSaveTimer      = null;
 let pendingExcelData = null;
 let prioritiesData   = {};
+let shortNamesData   = {}; // { codigo: 'nome curto manual' }
 let lastCountedMap   = {}; // { codigo: 'YYYY-MM-DD' }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -686,15 +723,17 @@ document.getElementById('btn-logout').addEventListener('click', async () => {
 // ─── Main data load ──────────────────────────────────────────────────────────
 async function loadMainData() {
   try {
-    const [imp, cnt, pri, hist] = await Promise.all([
+    const [imp, cnt, pri, hist, sn] = await Promise.all([
       apiGet(`/api/import?date=${TODAY}`),
       apiGet(`/api/counts?date=${TODAY}`),
       apiGet('/api/priorities'),
-      apiGet('/api/history')
+      apiGet('/api/history'),
+      apiGet('/api/shortnames')
     ]);
-    importData    = imp || null;
-    countsData    = cnt || {};
+    importData     = imp || null;
+    countsData     = cnt || {};
     prioritiesData = pri || {};
+    shortNamesData = sn  || {};
     buildLastCountedMap(hist || []);
   } catch (err) {
     if (err.message !== 'unauthorized') console.error(err);
@@ -1244,7 +1283,7 @@ document.getElementById('btn-priorities').addEventListener('click', () => {
 document.getElementById('close-priorities').addEventListener('click', () =>
   document.getElementById('priorities-modal').classList.add('hidden'));
 
-['history-modal','mapping-modal','confirm-modal','performance-modal','users-modal','priorities-modal'].forEach(id => {
+['history-modal','mapping-modal','confirm-modal','performance-modal','users-modal','priorities-modal','relatorio-modal'].forEach(id => {
   document.getElementById(id).addEventListener('click', function (e) { if (e.target === this) this.classList.add('hidden'); });
 });
 
@@ -1305,6 +1344,166 @@ async function savePriorities() {
   try { await apiPost('/api/priorities', prioritiesData); showToast('✓ Prioridades salvas'); }
   catch (err) { console.error('savePriorities', err); }
 }
+
+// ─── Relatório de Estoque ─────────────────────────────────────────────────────
+function autoShortName(nome) {
+  let s = nome;
+  s = s.replace(/^SUNGROW\s*-\s*/i, '');
+  s = s.replace(/^HUAWEI\s+HIBRIDO\s*-\s*/i, 'HUAWEI HÍB. ');
+  s = s.replace(/^HUAWEI\s*-\s*/i, 'HUAWEI ');
+  s = s.replace(/^MÓDULO\s+/i, '');
+  s = s.replace(/^MODULO\s+BIFACIAL\s+MONO\s+TOPCON\s+/i, '');
+  s = s.replace(/^MODULO\s+BIFACIAL\s+MONO\s+/i, '');
+  s = s.replace(/^MODULO\s+MONOFACIAL\s+MONOCRISTALINO\s+/i, '');
+  s = s.replace(/^AUTOTRANSFORMADOR\s+TRIFAS[IÁ]CO\s+/i, 'TRAFO ');
+  s = s.replace(/^DISJUNTOR\s+CAIXA\s+MOLDADA\s+/i, 'DJ CM ');
+  s = s.replace(/^DISJUNTOR\s+/i, 'DJ ');
+  s = s.replace(/^TERMINAL\s+TUBULAR\s+/i, 'TT ');
+  s = s.replace(/^TERMINAL\s+OLHAL\s+COMPRESSÃO\s+/i, 'TO ');
+  s = s.replace(/^TERMINAL\s+OLHAL\s+SAPATINHO\s+/i, 'TO SAP. ');
+  s = s.replace(/^TERMINAL\s+OLHAL\s+/i, 'TO ');
+  s = s.replace(/^TERMINAL\s+ELÉTRICO\s+/i, 'TRM ');
+  s = s.replace(/^CABO\s+HEPR\s+/i, 'HEPR ');
+  s = s.replace(/^CABO\s+SOLAR\s+/i, 'SOLAR ');
+  s = s.replace(/^CABO\s+FLEX\s+/i, 'FLEX ');
+  s = s.replace(/^CABO\s+AL\.4PLEX\.[^\s]*\s*/i, 'QUADRUPLEX ');
+  s = s.replace(/^CABO\s+AL\s+/i, 'CAB AL ');
+  s = s.replace(/^CABO\s+/i, 'CABO ');
+  s = s.replace(/^PERFIL\s+SMART\s+(PLANO|SUPORTE)\s+/i, 'TRILHO ');
+  s = s.replace(/^QUADRO\s+DE\s+DISTRIBUIÇÃO\s*-?\s*/i, 'QD ');
+  s = s.replace(/^QUADRO\s+S\.PVC\s+[^\s]+\s+/i, 'QD PVC ');
+  s = s.replace(/^ALÇA\s+PREF\s+CABO\s+MULTIPLEX\s+/i, 'ALÇA MPX ');
+  s = s.replace(/^CONECTOR\s+DERIVAÇÃO\s+PERFURANTE\s+/i, 'CDP ');
+  s = s.replace(/^CONECTOR\s+DE\s+PERFURAÇÃO\s+/i, 'CDP ');
+  s = s.replace(/^OTIMIZADOR\s+DE\s+POTÊNCIA\s+/i, 'OTIMIZ. ');
+  s = s.replace(/^ACESSÓRIO\s+DE\s+MONITORAMENTO\s+/i, 'MONITOR ');
+  s = s.replace(/^TRANSFORMADOR\s+DE\s+CORRENTE\s+/i, 'TC ');
+  s = s.replace(/^SMART\s+METER\s+/i, 'SMART METER ');
+  s = s.replace(/\s{2,}/g, ' ').trim();
+  return s;
+}
+
+document.getElementById('btn-relatorio').addEventListener('click', openRelatorioModal);
+document.getElementById('close-relatorio').addEventListener('click', () =>
+  document.getElementById('relatorio-modal').classList.add('hidden'));
+
+function openRelatorioModal() {
+  document.getElementById('relatorio-modal').classList.remove('hidden');
+  renderRelatorio();
+}
+
+function renderRelatorio() {
+  const showZeros = document.getElementById('rel-show-zeros').checked;
+  const isAdmin   = currentSession?.role === 'admin';
+  const cats = [...new Set(CATALOG.map(p => p.categoria))].sort();
+  let html = '';
+
+  cats.forEach(cat => {
+    const items = CATALOG.filter(p => p.categoria === cat);
+    const visible = items.filter(p => {
+      const qty = importData?.products?.[p.codigo]?.estoque ?? 0;
+      return showZeros || qty > 0;
+    });
+    if (!visible.length) return;
+
+    html += `<div class="rel-cat-header">${cat}</div>`;
+    visible.forEach(p => {
+      const qty       = importData?.products?.[p.codigo]?.estoque ?? 0;
+      const isManual  = !!shortNamesData[p.codigo];
+      const shortName = isManual ? shortNamesData[p.codigo] : autoShortName(p.produto);
+      const qtyColor  = qty === 0 ? 'var(--muted)' : 'var(--text)';
+      const safeShort = shortName.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+      const safeFull  = p.produto.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+
+      if (isAdmin) {
+        html += `<div class="rel-row">
+          <div class="rel-name">
+            <input type="text" value="${safeShort}" data-codigo="${p.codigo}"
+              title="${safeFull}" placeholder="${autoShortName(p.produto).replace(/"/g,'&quot;')}"
+              onchange="onShortNameChange('${p.codigo}', this.value)">
+          </div>
+          ${!isManual ? '<span class="rel-auto-tag">auto</span>' : ''}
+          <div class="rel-qty" style="color:${qtyColor}">${qty}</div>
+        </div>`;
+      } else {
+        html += `<div class="rel-row">
+          <div class="rel-name-static rel-name">${shortName}</div>
+          <div class="rel-qty" style="color:${qtyColor}">${qty}</div>
+        </div>`;
+      }
+    });
+  });
+
+  if (!html) {
+    const msg = importData
+      ? 'Nenhum item com estoque maior que zero. Marque "Incluir itens com estoque zero" para ver todos.'
+      : 'Nenhum import carregado. Carregue um Excel primeiro para ver as quantidades.';
+    html = `<div class="empty-state"><div class="empty-icon">📦</div>${msg}</div>`;
+  }
+
+  document.getElementById('relatorio-body').innerHTML = html;
+}
+
+function onShortNameChange(codigo, value) {
+  const trimmed = value.trim();
+  const auto = autoShortName(CATALOG_MAP.get(codigo)?.produto || '');
+  if (!trimmed || trimmed === auto) delete shortNamesData[codigo];
+  else shortNamesData[codigo] = trimmed;
+  // Remove or add the "auto" tag next to the input
+  const input = document.querySelector(`[data-codigo="${codigo}"]`);
+  if (input) {
+    const tag = input.closest('.rel-row')?.querySelector('.rel-auto-tag');
+    if (tag) tag.remove();
+  }
+  clearTimeout(snSaveTimer);
+  snSaveTimer = setTimeout(saveShortNames, 1500);
+}
+
+async function saveShortNames() {
+  try { await apiPost('/api/shortnames', shortNamesData); showToast('✓ Nomes salvos'); }
+  catch (err) { if (err.message !== 'unauthorized') console.error('saveShortNames', err); }
+}
+
+document.getElementById('btn-rel-autonome').addEventListener('click', () => {
+  if (!confirm('Resetar todos os nomes manuais? Os nomes voltarão para o automático.')) return;
+  shortNamesData = {};
+  saveShortNames();
+  renderRelatorio();
+});
+
+document.getElementById('btn-rel-copy').addEventListener('click', () => {
+  const showZeros = document.getElementById('rel-show-zeros').checked;
+  const cats = [...new Set(CATALOG.map(p => p.categoria))].sort();
+  const lines = [];
+  cats.forEach(cat => {
+    const items = CATALOG.filter(p => p.categoria === cat);
+    const visible = items.filter(p => {
+      const qty = importData?.products?.[p.codigo]?.estoque ?? 0;
+      return showZeros || qty > 0;
+    });
+    if (!visible.length) return;
+    lines.push(cat.toUpperCase());
+    visible.forEach(p => {
+      const qty       = importData?.products?.[p.codigo]?.estoque ?? 0;
+      const shortName = shortNamesData[p.codigo] || autoShortName(p.produto);
+      lines.push(`${shortName}: ${qty}`);
+    });
+    lines.push('');
+  });
+  const text = lines.join('\n').trimEnd();
+  if (!text) { showToast('Nenhum item para copiar.'); return; }
+  navigator.clipboard.writeText(text)
+    .then(() => showToast('✓ Copiado para a área de transferência'))
+    .catch(() => {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.cssText = 'position:fixed;opacity:0';
+      document.body.appendChild(ta); ta.select(); document.execCommand('copy');
+      document.body.removeChild(ta);
+      showToast('✓ Copiado!');
+    });
+});
+
+document.getElementById('rel-show-zeros').addEventListener('change', renderRelatorio);
 
 // ─── Init ────────────────────────────────────────────────────────────────────
 async function init() {
