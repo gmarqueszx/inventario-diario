@@ -250,12 +250,12 @@
   /* ── Relatório de Estoque ── */
   .rel-cat-header { font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--muted); padding: 10px 0 4px; margin-top: 14px; border-bottom: 2px solid var(--border); }
   .rel-cat-header:first-child { margin-top: 0; }
-  .rel-row { display: flex; align-items: center; gap: 6px; padding: 3px 0; border-bottom: 1px solid #f0f0f0; border-top: 2px solid transparent; transition: border-top-color 0.1s; }
+  .rel-row { display: flex; align-items: center; gap: 6px; padding: 3px 0; border-bottom: 1px solid #f0f0f0; }
   .rel-row:last-child { border-bottom: none; }
-  .rel-row.drag-over { border-top-color: var(--primary); }
-  .rel-row.dragging { opacity: 0.4; }
-  .rel-drag { cursor: grab; color: #cbd5e0; font-size: 16px; padding: 4px 2px; flex-shrink: 0; user-select: none; line-height: 1; }
-  .rel-drag:hover { color: var(--muted); }
+  .rel-arrows { display: flex; flex-direction: column; gap: 1px; flex-shrink: 0; }
+  .rel-move-btn { background: none; border: none; cursor: pointer; color: #cbd5e0; font-size: 11px; padding: 1px 4px; line-height: 1; border-radius: 3px; }
+  .rel-move-btn:hover { color: var(--primary); background: #ebf8ff; }
+  .rel-move-btn:disabled { opacity: 0.2; cursor: default; }
   .rel-name { flex: 1; min-width: 0; }
   .rel-name input { width: 100%; border: 1px solid transparent; border-radius: 4px; padding: 4px 7px; font-size: 13px; font-family: inherit; background: transparent; color: var(--text); transition: all 0.12s; }
   .rel-name input:hover { border-color: var(--border); background: var(--bg); }
@@ -565,7 +565,6 @@ let shortNamesData   = {}; // { codigo: 'nome curto manual' }
 let lastCountedMap   = {}; // { codigo: 'YYYY-MM-DD' }
 let relatorioOrder   = []; // [] = padrão; array de codigos = ordem personalizada
 let relatorioHidden  = new Set(); // codigos removidos do relatório
-let relDragSrc       = null;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 function todayLabel() {
@@ -1443,15 +1442,16 @@ function renderRelatorio() {
   const showZeros = document.getElementById('rel-show-zeros').checked;
   const isAdmin   = currentSession?.role === 'admin';
   const items     = getRelatorioItems();
+  // Build the visible list first so ▲▼ buttons know first/last
+  const visibleItems = items.filter(p =>
+    !relatorioHidden.has(p.codigo) && (showZeros || (importData?.products?.[p.codigo]?.estoque ?? 0) > 0)
+  );
+
   let html = '';
   let prevCat = null;
-  let hasVisible = false;
 
-  items.forEach(p => {
-    if (relatorioHidden.has(p.codigo)) return;
+  visibleItems.forEach((p, visIdx) => {
     const qty = importData?.products?.[p.codigo]?.estoque ?? 0;
-    if (!showZeros && qty === 0) return;
-    hasVisible = true;
 
     if (p.categoria !== prevCat) {
       html += `<div class="rel-cat-header">${p.categoria}</div>`;
@@ -1465,12 +1465,13 @@ function renderRelatorio() {
     const safeFull  = p.produto.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
 
     if (isAdmin) {
-      html += `<div class="rel-row" draggable="true"
-          ondragstart="relDragStart(event,'${p.codigo}')"
-          ondragover="relDragOver(event)"
-          ondragleave="relDragLeave(event)"
-          ondrop="relDrop(event,'${p.codigo}')">
-        <span class="rel-drag" title="Arrastar para reordenar">⠿</span>
+      const isFirst = visIdx === 0;
+      const isLast  = visIdx === visibleItems.length - 1;
+      html += `<div class="rel-row">
+        <div class="rel-arrows">
+          <button class="rel-move-btn" title="Mover para cima" onclick="moveRelItem('${p.codigo}',-1)" ${isFirst ? 'disabled' : ''}>▲</button>
+          <button class="rel-move-btn" title="Mover para baixo" onclick="moveRelItem('${p.codigo}',1)" ${isLast ? 'disabled' : ''}>▼</button>
+        </div>
         <div class="rel-name">
           <input type="text" value="${safeShort}" data-codigo="${p.codigo}"
             title="${safeFull}"
@@ -1489,7 +1490,7 @@ function renderRelatorio() {
     }
   });
 
-  if (!hasVisible) {
+  if (!visibleItems.length) {
     const msg = importData
       ? 'Nenhum item com estoque maior que zero. Marque "Incluir estoque zero" para ver todos.'
       : 'Nenhum import carregado. Carregue um Excel primeiro para ver as quantidades.';
@@ -1515,30 +1516,19 @@ function renderRelatorio() {
   document.getElementById('relatorio-body').innerHTML = html;
 }
 
-// ── Drag and drop ─
-function relDragStart(e, codigo) {
-  relDragSrc = codigo;
-  e.dataTransfer.effectAllowed = 'move';
-  setTimeout(() => e.currentTarget?.classList.add('dragging'), 0);
-}
-function relDragOver(e) {
-  e.preventDefault();
-  e.dataTransfer.dropEffect = 'move';
-  e.currentTarget.classList.add('drag-over');
-}
-function relDragLeave(e) { e.currentTarget.classList.remove('drag-over'); }
-function relDrop(e, targetCod) {
-  e.preventDefault();
-  e.currentTarget.classList.remove('drag-over');
-  if (!relDragSrc || relDragSrc === targetCod) { relDragSrc = null; return; }
-  const items = getRelatorioItems();
-  const from  = items.findIndex(p => p.codigo === relDragSrc);
-  const to    = items.findIndex(p => p.codigo === targetCod);
-  if (from < 0 || to < 0) { relDragSrc = null; return; }
-  items.splice(to, 0, items.splice(from, 1)[0]);
-  relatorioOrder = items.map(p => p.codigo);
+// ── Reorder ─
+function moveRelItem(codigo, dir) {
+  if (!relatorioOrder.length) relatorioOrder = getRelatorioItems().map(p => p.codigo);
+  const idx = relatorioOrder.indexOf(codigo);
+  if (idx < 0) return;
+  // Skip hidden items when looking for swap target
+  let target = idx + dir;
+  while (target >= 0 && target < relatorioOrder.length && relatorioHidden.has(relatorioOrder[target])) {
+    target += dir;
+  }
+  if (target < 0 || target >= relatorioOrder.length) return;
+  [relatorioOrder[idx], relatorioOrder[target]] = [relatorioOrder[target], relatorioOrder[idx]];
   saveRelatorioConfig();
-  relDragSrc = null;
   renderRelatorio();
 }
 
