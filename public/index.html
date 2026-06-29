@@ -265,11 +265,25 @@
   .rel-qty { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 14px; white-space: nowrap; min-width: 36px; text-align: right; flex-shrink: 0; }
   .rel-remove { background: none; border: none; cursor: pointer; color: #cbd5e0; font-size: 18px; padding: 0 2px; line-height: 1; flex-shrink: 0; }
   .rel-remove:hover { color: var(--red); }
-  .rel-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+  .rel-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+  .rel-tabs { display: inline-flex; border: 1.5px solid var(--border); border-radius: 7px; overflow: hidden; margin-bottom: 12px; }
+  .rel-tab { background: none; border: none; cursor: pointer; padding: 7px 16px; font-size: 13px; font-weight: 500; color: var(--muted); white-space: nowrap; }
+  .rel-tab.active { background: var(--primary); color: #fff; }
   .rel-hidden-section { margin-top: 20px; padding-top: 14px; border-top: 1px dashed var(--border); }
   .rel-hidden-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
   .rel-restore-tag { display: inline-flex; align-items: center; gap: 5px; background: var(--bg); border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; font-size: 12px; margin: 3px 3px 0 0; cursor: pointer; transition: all 0.12s; }
   .rel-restore-tag:hover { background: var(--green-bg); border-color: var(--green-border); color: var(--green); }
+  /* Preview card */
+  .rel-preview { background: #fff; border: 1.5px solid var(--border); border-radius: 10px; padding: 22px 24px; }
+  .rel-preview-head { margin-bottom: 18px; }
+  .rel-preview-title { font-size: 16px; font-weight: 800; }
+  .rel-preview-date { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .rel-preview-cat { font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--primary); margin: 18px 0 6px; padding-bottom: 5px; border-bottom: 2px solid var(--border); }
+  .rel-preview-cat:first-of-type { margin-top: 0; }
+  .rel-preview-item { display: flex; justify-content: space-between; align-items: baseline; padding: 6px 0; border-bottom: 1px solid #f5f5f5; }
+  .rel-preview-item:last-child { border-bottom: none; }
+  .rel-preview-name { font-size: 14px; flex: 1; padding-right: 12px; }
+  .rel-preview-qty { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
   @media (max-width: 768px) {
     .main { padding: 12px; }
@@ -424,21 +438,36 @@
 
 <!-- Relatório de Estoque -->
 <div class="modal-backdrop hidden" id="relatorio-modal">
-  <div class="modal" style="max-width:640px">
+  <div class="modal" style="max-width:620px">
     <div class="modal-header">
       <h2>📄 Relatório de Estoque</h2>
       <button class="modal-close" id="close-relatorio">×</button>
     </div>
     <div class="modal-body">
+      <!-- Abas (somente gestor) -->
+      <div class="rel-tabs hidden" id="rel-tabs">
+        <button class="rel-tab active" id="rel-tab-view" onclick="switchRelTab('view')">👁 Visualizar</button>
+        <button class="rel-tab" id="rel-tab-edit" onclick="switchRelTab('edit')">✏ Editar lista</button>
+      </div>
+      <!-- Barra de ações -->
       <div class="rel-toolbar">
-        <button class="btn btn-outline btn-sm hidden admin-only" id="btn-rel-autonome">↺ Resetar nomes</button>
-        <button class="btn btn-outline btn-sm hidden admin-only" id="btn-rel-restore-all">+ Restaurar todos</button>
-        <button class="btn btn-primary btn-sm" id="btn-rel-copy">📋 Copiar texto</button>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;margin-left:auto">
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
           <input type="checkbox" id="rel-show-zeros"> Incluir estoque zero
         </label>
+        <button class="btn btn-primary btn-sm" style="margin-left:auto" id="btn-rel-copy">📋 Copiar</button>
       </div>
-      <div id="relatorio-body"></div>
+      <!-- Visualizar (padrão) -->
+      <div id="rel-view-section">
+        <div id="relatorio-body"></div>
+      </div>
+      <!-- Editar (somente gestor, oculto por padrão) -->
+      <div id="rel-edit-section" class="hidden">
+        <div style="display:flex;gap:8px;margin-bottom:12px">
+          <button class="btn btn-outline btn-sm" id="btn-rel-autonome">↺ Resetar nomes</button>
+          <button class="btn btn-outline btn-sm" id="btn-rel-restore-all">+ Restaurar todos</button>
+        </div>
+        <div id="relatorio-edit-body"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -565,6 +594,7 @@ let shortNamesData   = {}; // { codigo: 'nome curto manual' }
 let lastCountedMap   = {}; // { codigo: 'YYYY-MM-DD' }
 let relatorioOrder   = []; // [] = padrão; array de codigos = ordem personalizada
 let relatorioHidden  = new Set(); // codigos removidos do relatório
+let relCurrentTab    = 'view';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 function todayLabel() {
@@ -1435,85 +1465,107 @@ document.getElementById('close-relatorio').addEventListener('click', () =>
 
 function openRelatorioModal() {
   document.getElementById('relatorio-modal').classList.remove('hidden');
+  if (currentSession?.role === 'admin') document.getElementById('rel-tabs').classList.remove('hidden');
+  switchRelTab('view');
   renderRelatorio();
 }
 
+function switchRelTab(tab) {
+  relCurrentTab = tab;
+  document.getElementById('rel-tab-view').classList.toggle('active', tab === 'view');
+  document.getElementById('rel-tab-edit').classList.toggle('active', tab === 'edit');
+  document.getElementById('rel-view-section').classList.toggle('hidden', tab !== 'view');
+  document.getElementById('rel-edit-section').classList.toggle('hidden', tab !== 'edit');
+}
+
 function renderRelatorio() {
+  renderRelatorioPreview();
+  if (currentSession?.role === 'admin') renderRelatorioEdit();
+}
+
+function renderRelatorioPreview() {
   const showZeros = document.getElementById('rel-show-zeros').checked;
-  const isAdmin   = currentSession?.role === 'admin';
-  const items     = getRelatorioItems();
-  // Build the visible list first so ▲▼ buttons know first/last
+  const items = getRelatorioItems().filter(p =>
+    !relatorioHidden.has(p.codigo) && (showZeros || (importData?.products?.[p.codigo]?.estoque ?? 0) > 0)
+  );
+  const el = document.getElementById('relatorio-body');
+  if (!items.length) {
+    const msg = importData
+      ? 'Nenhum item com estoque maior que zero. Marque "Incluir estoque zero" para ver todos.'
+      : 'Nenhum import carregado. Carregue um Excel primeiro para ver as quantidades.';
+    el.innerHTML = `<div class="empty-state"><div class="empty-icon">📦</div>${msg}</div>`;
+    return;
+  }
+  const dateStr = new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  let html = `<div class="rel-preview">
+    <div class="rel-preview-head">
+      <div class="rel-preview-title">Relatório de Estoque</div>
+      <div class="rel-preview-date">${dateStr}</div>
+    </div>`;
+  let prevCat = null;
+  items.forEach(p => {
+    const qty = importData?.products?.[p.codigo]?.estoque ?? 0;
+    if (p.categoria !== prevCat) {
+      html += `<div class="rel-preview-cat">${p.categoria}</div>`;
+      prevCat = p.categoria;
+    }
+    const name = shortNamesData[p.codigo] || autoShortName(p.produto);
+    const qtyStyle = qty === 0 ? 'color:var(--muted)' : '';
+    html += `<div class="rel-preview-item">
+      <span class="rel-preview-name">${name}</span>
+      <span class="rel-preview-qty" style="${qtyStyle}">${qty}</span>
+    </div>`;
+  });
+  el.innerHTML = html + '</div>';
+}
+
+function renderRelatorioEdit() {
+  const showZeros = document.getElementById('rel-show-zeros').checked;
+  const items = getRelatorioItems();
   const visibleItems = items.filter(p =>
     !relatorioHidden.has(p.codigo) && (showZeros || (importData?.products?.[p.codigo]?.estoque ?? 0) > 0)
   );
-
   let html = '';
   let prevCat = null;
-
   visibleItems.forEach((p, visIdx) => {
     const qty = importData?.products?.[p.codigo]?.estoque ?? 0;
-
     if (p.categoria !== prevCat) {
       html += `<div class="rel-cat-header">${p.categoria}</div>`;
       prevCat = p.categoria;
     }
-
     const isManual  = !!shortNamesData[p.codigo];
     const shortName = isManual ? shortNamesData[p.codigo] : autoShortName(p.produto);
     const qtyColor  = qty === 0 ? 'var(--muted)' : 'var(--text)';
     const safeShort = shortName.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
     const safeFull  = p.produto.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
-
-    if (isAdmin) {
-      const isFirst = visIdx === 0;
-      const isLast  = visIdx === visibleItems.length - 1;
-      html += `<div class="rel-row">
-        <div class="rel-arrows">
-          <button class="rel-move-btn" title="Mover para cima" onclick="moveRelItem('${p.codigo}',-1)" ${isFirst ? 'disabled' : ''}>▲</button>
-          <button class="rel-move-btn" title="Mover para baixo" onclick="moveRelItem('${p.codigo}',1)" ${isLast ? 'disabled' : ''}>▼</button>
-        </div>
-        <div class="rel-name">
-          <input type="text" value="${safeShort}" data-codigo="${p.codigo}"
-            title="${safeFull}"
-            placeholder="${autoShortName(p.produto).replace(/"/g,'&quot;')}"
-            onchange="onShortNameChange('${p.codigo}', this.value)">
-        </div>
-        ${!isManual ? '<span class="rel-auto-tag">auto</span>' : ''}
-        <div class="rel-qty" style="color:${qtyColor}">${qty}</div>
-        <button class="rel-remove" title="Remover do relatório" onclick="hideRelItem('${p.codigo}')">×</button>
-      </div>`;
-    } else {
-      html += `<div class="rel-row">
-        <div class="rel-name-static rel-name">${shortName}</div>
-        <div class="rel-qty" style="color:${qtyColor}">${qty}</div>
-      </div>`;
-    }
+    const isFirst = visIdx === 0, isLast = visIdx === visibleItems.length - 1;
+    html += `<div class="rel-row">
+      <div class="rel-arrows">
+        <button class="rel-move-btn" onclick="moveRelItem('${p.codigo}',-1)" ${isFirst ? 'disabled' : ''}>▲</button>
+        <button class="rel-move-btn" onclick="moveRelItem('${p.codigo}',1)" ${isLast ? 'disabled' : ''}>▼</button>
+      </div>
+      <div class="rel-name">
+        <input type="text" value="${safeShort}" data-codigo="${p.codigo}"
+          title="${safeFull}"
+          placeholder="${autoShortName(p.produto).replace(/"/g,'&quot;')}"
+          onchange="onShortNameChange('${p.codigo}', this.value)">
+      </div>
+      ${!isManual ? '<span class="rel-auto-tag">auto</span>' : ''}
+      <div class="rel-qty" style="color:${qtyColor}">${qty}</div>
+      <button class="rel-remove" onclick="hideRelItem('${p.codigo}')">×</button>
+    </div>`;
   });
-
-  if (!visibleItems.length) {
-    const msg = importData
-      ? 'Nenhum item com estoque maior que zero. Marque "Incluir estoque zero" para ver todos.'
-      : 'Nenhum import carregado. Carregue um Excel primeiro para ver as quantidades.';
-    html = `<div class="empty-state"><div class="empty-icon">📦</div>${msg}</div>`;
-  }
-
-  // Seção de itens ocultos (admin)
-  if (isAdmin && relatorioHidden.size > 0) {
+  if (relatorioHidden.size > 0) {
     const tags = [...relatorioHidden].map(cod => {
       const cat = CATALOG_MAP.get(cod);
       if (!cat || !REL_CATS.includes(cat.categoria)) return '';
       const name = shortNamesData[cod] || autoShortName(cat.produto);
-      return `<span class="rel-restore-tag" onclick="restoreRelItem('${cod}')" title="Restaurar no relatório">+ ${name}</span>`;
+      return `<span class="rel-restore-tag" onclick="restoreRelItem('${cod}')">+ ${name}</span>`;
     }).filter(Boolean).join('');
-    if (tags) {
-      html += `<div class="rel-hidden-section">
-        <div class="rel-hidden-label">Itens removidos — clique para restaurar:</div>
-        ${tags}
-      </div>`;
-    }
+    if (tags) html += `<div class="rel-hidden-section"><div class="rel-hidden-label">Itens removidos — clique para restaurar:</div>${tags}</div>`;
   }
-
-  document.getElementById('relatorio-body').innerHTML = html;
+  document.getElementById('relatorio-edit-body').innerHTML = html ||
+    '<div class="empty-state"><div class="empty-icon">📦</div>Nenhum item visível.</div>';
 }
 
 // ── Reorder ─
@@ -1554,6 +1606,7 @@ function onShortNameChange(codigo, value) {
   else shortNamesData[codigo] = trimmed;
   const input = document.querySelector(`.rel-name input[data-codigo="${codigo}"]`);
   if (input) { const tag = input.closest('.rel-row')?.querySelector('.rel-auto-tag'); if (tag) tag.remove(); }
+  renderRelatorioPreview(); // atualiza preview enquanto digita
   clearTimeout(snSaveTimer);
   snSaveTimer = setTimeout(saveShortNames, 1500);
 }
