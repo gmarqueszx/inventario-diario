@@ -490,6 +490,31 @@
       <h2>📊 Desempenho dos Operadores</h2>
       <button class="modal-close" id="close-performance">×</button>
     </div>
+    <div style="padding:10px 20px;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <label style="font-size:13px;color:var(--muted);white-space:nowrap">Filtrar por:</label>
+      <select id="perf-filter-operator" style="font-size:13px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:#fff">
+        <option value="">Todos os operadores</option>
+      </select>
+      <select id="perf-filter-month" style="font-size:13px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:#fff">
+        <option value="">Todos os meses</option>
+        <option value="1">Janeiro</option>
+        <option value="2">Fevereiro</option>
+        <option value="3">Março</option>
+        <option value="4">Abril</option>
+        <option value="5">Maio</option>
+        <option value="6">Junho</option>
+        <option value="7">Julho</option>
+        <option value="8">Agosto</option>
+        <option value="9">Setembro</option>
+        <option value="10">Outubro</option>
+        <option value="11">Novembro</option>
+        <option value="12">Dezembro</option>
+      </select>
+      <select id="perf-filter-year" style="font-size:13px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:#fff">
+        <option value="">Todos os anos</option>
+      </select>
+      <button class="btn btn-outline btn-sm" onclick="clearPerfFilters()">✕ Limpar</button>
+    </div>
     <div class="modal-body" id="performance-body"></div>
   </div>
 </div>
@@ -1116,12 +1141,48 @@ function toggleHistory(idx) {
 // ─── Performance modal (admin) ────────────────────────────────────────────────
 document.getElementById('btn-performance').addEventListener('click', openPerformanceModal);
 document.getElementById('close-performance').addEventListener('click', () => document.getElementById('performance-modal').classList.add('hidden'));
+['perf-filter-operator','perf-filter-month','perf-filter-year'].forEach(id => {
+  document.getElementById(id).addEventListener('change', applyPerfFilters);
+});
+
+let perfHistory = [];
 
 async function openPerformanceModal() {
   document.getElementById('performance-modal').classList.remove('hidden');
   document.getElementById('performance-body').innerHTML = '<div style="text-align:center;padding:30px;color:var(--muted)">Carregando...</div>';
-  try { renderPerformance(await apiGet('/api/history')); }
+  try {
+    perfHistory = await apiGet('/api/history');
+    populatePerfFilters(perfHistory);
+    applyPerfFilters();
+  }
   catch (err) { document.getElementById('performance-body').innerHTML = `<p style="color:red">Erro: ${err.message}</p>`; }
+}
+
+function populatePerfFilters(history) {
+  const operators = [...new Set(history.map(e => e.operatorName || 'Desconhecido'))].sort();
+  const years = [...new Set(history.map(e => e.date?.slice(0,4)).filter(Boolean))].sort().reverse();
+  const opSel = document.getElementById('perf-filter-operator');
+  opSel.innerHTML = '<option value="">Todos os operadores</option>' + operators.map(n => `<option value="${n}">${n}</option>`).join('');
+  const yrSel = document.getElementById('perf-filter-year');
+  yrSel.innerHTML = '<option value="">Todos os anos</option>' + years.map(y => `<option value="${y}">${y}</option>`).join('');
+}
+
+function applyPerfFilters() {
+  const op    = document.getElementById('perf-filter-operator').value;
+  const month = document.getElementById('perf-filter-month').value;
+  const year  = document.getElementById('perf-filter-year').value;
+  let filtered = perfHistory;
+  if (op)    filtered = filtered.filter(e => (e.operatorName || 'Desconhecido') === op);
+  if (month) filtered = filtered.filter(e => e.date && new Date(e.date + 'T12:00:00').getMonth() + 1 === parseInt(month));
+  if (year)  filtered = filtered.filter(e => e.date?.startsWith(year));
+  renderPerformance(filtered);
+}
+
+function clearPerfFilters() {
+  document.getElementById('perf-filter-operator').value = '';
+  document.getElementById('perf-filter-month').value = '';
+  document.getElementById('perf-filter-year').value = '';
+  applyPerfFilters();
 }
 
 function renderPerformance(history) {
