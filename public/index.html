@@ -263,6 +263,10 @@
   .rel-name-static { font-size: 13px; padding: 4px 7px; }
   .rel-auto-tag { font-size: 10px; color: var(--muted); background: #edf2f7; border-radius: 4px; padding: 1px 4px; flex-shrink: 0; }
   .rel-qty { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 14px; white-space: nowrap; min-width: 36px; text-align: right; flex-shrink: 0; }
+  .rel-qty-input { width: 54px; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; font-size: 14px; border: 1px solid var(--border); border-radius: 5px; padding: 2px 5px; flex-shrink: 0; background: #fff; }
+  .rel-qty-input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 2px #ebf8ff; }
+  .rel-reset-qty { background: none; border: none; cursor: pointer; color: #a0aec0; font-size: 13px; padding: 0 2px; flex-shrink: 0; }
+  .rel-reset-qty:hover { color: var(--primary); }
   .rel-remove { background: none; border: none; cursor: pointer; color: #cbd5e0; font-size: 18px; padding: 0 2px; line-height: 1; flex-shrink: 0; }
   .rel-remove:hover { color: var(--red); }
   .rel-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
@@ -617,9 +621,10 @@ let pendingExcelData = null;
 let prioritiesData   = {};
 let shortNamesData   = {}; // { codigo: 'nome curto manual' }
 let lastCountedMap   = {}; // { codigo: 'YYYY-MM-DD' }
-let relatorioOrder   = []; // [] = padrão; array de codigos = ordem personalizada
-let relatorioHidden  = new Set(); // codigos removidos do relatório
-let relCurrentTab    = 'view';
+let relatorioOrder       = [];
+let relatorioHidden      = new Set();
+let relatorioQtdOverride = {}; // { codigo: number } — substituições manuais de qtd
+let relCurrentTab        = 'view';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 function todayLabel() {
@@ -1495,12 +1500,35 @@ function loadRelatorioConfig() {
     if (o) relatorioOrder = JSON.parse(o);
     const h = localStorage.getItem('rel_hidden');
     if (h) relatorioHidden = new Set(JSON.parse(h));
+    const q = localStorage.getItem('rel_qty_override');
+    if (q) relatorioQtdOverride = JSON.parse(q);
   } catch {}
 }
 
 function saveRelatorioConfig() {
   localStorage.setItem('rel_order', JSON.stringify(relatorioOrder));
   localStorage.setItem('rel_hidden', JSON.stringify([...relatorioHidden]));
+  localStorage.setItem('rel_qty_override', JSON.stringify(relatorioQtdOverride));
+}
+
+function getRelQty(codigo) {
+  if (relatorioQtdOverride[codigo] !== undefined) return relatorioQtdOverride[codigo];
+  return importData?.products?.[codigo]?.estoque ?? 0;
+}
+
+function setRelQtyOverride(codigo, raw) {
+  const val = parseInt(raw, 10);
+  if (isNaN(val) || val < 0) return;
+  relatorioQtdOverride[codigo] = val;
+  saveRelatorioConfig();
+  renderRelatorioPreview();
+}
+
+function resetRelQty(codigo) {
+  delete relatorioQtdOverride[codigo];
+  saveRelatorioConfig();
+  renderRelatorioEdit();
+  renderRelatorioPreview();
 }
 
 function getRelatorioItems() {
@@ -1547,7 +1575,7 @@ function renderRelatorio() {
 function renderRelatorioPreview() {
   const showZeros = document.getElementById('rel-show-zeros').checked;
   const items = getRelatorioItems().filter(p =>
-    !relatorioHidden.has(p.codigo) && (showZeros || (importData?.products?.[p.codigo]?.estoque ?? 0) > 0)
+    !relatorioHidden.has(p.codigo) && (showZeros || getRelQty(p.codigo) > 0)
   );
   const el = document.getElementById('relatorio-body');
   if (!items.length) {
@@ -1565,7 +1593,7 @@ function renderRelatorioPreview() {
     </div>`;
   let prevCat = null;
   items.forEach(p => {
-    const qty = importData?.products?.[p.codigo]?.estoque ?? 0;
+    const qty = getRelQty(p.codigo);
     if (p.categoria !== prevCat) {
       html += `<div class="rel-preview-cat">${p.categoria}</div>`;
       prevCat = p.categoria;
@@ -1584,22 +1612,25 @@ function renderRelatorioEdit() {
   const showZeros = document.getElementById('rel-show-zeros').checked;
   const items = getRelatorioItems();
   const visibleItems = items.filter(p =>
-    !relatorioHidden.has(p.codigo) && (showZeros || (importData?.products?.[p.codigo]?.estoque ?? 0) > 0)
+    !relatorioHidden.has(p.codigo) && (showZeros || getRelQty(p.codigo) > 0)
   );
   let html = '';
   let prevCat = null;
   visibleItems.forEach((p, visIdx) => {
-    const qty = importData?.products?.[p.codigo]?.estoque ?? 0;
+    const qty = getRelQty(p.codigo);
+    const erpQty = importData?.products?.[p.codigo]?.estoque ?? 0;
+    const hasOverride = relatorioQtdOverride[p.codigo] !== undefined;
     if (p.categoria !== prevCat) {
       html += `<div class="rel-cat-header">${p.categoria}</div>`;
       prevCat = p.categoria;
     }
     const isManual  = !!shortNamesData[p.codigo];
     const shortName = isManual ? shortNamesData[p.codigo] : autoShortName(p.produto);
-    const qtyColor  = qty === 0 ? 'var(--muted)' : 'var(--text)';
+    const qtyColor  = qty === 0 ? 'var(--muted)' : hasOverride ? 'var(--blue)' : 'var(--text)';
     const safeShort = shortName.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
     const safeFull  = p.produto.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
     const isFirst = visIdx === 0, isLast = visIdx === visibleItems.length - 1;
+    const resetBtn = hasOverride ? `<button class="rel-reset-qty" title="Restaurar qtd ERP (${erpQty})" onclick="resetRelQty('${p.codigo}')">↺</button>` : '';
     html += `<div class="rel-row">
       <div class="rel-arrows">
         <button class="rel-move-btn" onclick="moveRelItem('${p.codigo}',-1)" ${isFirst ? 'disabled' : ''}>▲</button>
@@ -1612,7 +1643,10 @@ function renderRelatorioEdit() {
           onchange="onShortNameChange('${p.codigo}', this.value)">
       </div>
       ${!isManual ? '<span class="rel-auto-tag">auto</span>' : ''}
-      <div class="rel-qty" style="color:${qtyColor}">${qty}</div>
+      ${resetBtn}
+      <input type="number" class="rel-qty-input" min="0" value="${qty}"
+        style="color:${qtyColor}"
+        oninput="setRelQtyOverride('${p.codigo}', this.value)">
       <button class="rel-remove" onclick="hideRelItem('${p.codigo}')">×</button>
     </div>`;
   });
@@ -1698,7 +1732,7 @@ document.getElementById('btn-rel-copy').addEventListener('click', () => {
   const lines = [];
   items.forEach(p => {
     if (relatorioHidden.has(p.codigo)) return;
-    const qty = importData?.products?.[p.codigo]?.estoque ?? 0;
+    const qty = getRelQty(p.codigo);
     if (!showZeros && qty === 0) return;
     const name = shortNamesData[p.codigo] || autoShortName(p.produto);
     lines.push(`${name}: ${qty}`);
