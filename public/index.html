@@ -1536,8 +1536,17 @@ function getRelatorioItems() {
   if (relatorioOrder.length) {
     const ordered = relatorioOrder.map(cod => pool.find(p => p.codigo === cod)).filter(Boolean);
     const inOrder = new Set(relatorioOrder);
-    // append any new items not yet in the saved order (e.g. new catalog entries)
-    pool.forEach(p => { if (!inOrder.has(p.codigo)) ordered.push(p); });
+    // insere itens novos (ainda não salvos na ordem) dentro do bloco da própria categoria,
+    // logo após o último item dessa categoria — em vez de sempre no final da lista
+    pool.forEach(p => {
+      if (inOrder.has(p.codigo)) return;
+      let insertAt = -1;
+      for (let i = ordered.length - 1; i >= 0; i--) {
+        if (ordered[i].categoria === p.categoria) { insertAt = i + 1; break; }
+      }
+      if (insertAt === -1) ordered.push(p);
+      else ordered.splice(insertAt, 0, p);
+    });
     return ordered;
   }
   // default: Inversores first, then Placas; within each, sort by ERP qty desc
