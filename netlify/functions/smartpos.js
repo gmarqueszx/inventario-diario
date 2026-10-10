@@ -6,6 +6,8 @@ const redis = new Redis({
 });
 
 const SMARTPOS_BASE = 'https://api.smartpos.app/v1';
+const PAGE_SIZE = 100;
+const PRODUCTS_CACHE_KEY = 'smartpos:products';
 
 const h = {
   'Content-Type': 'application/json',
@@ -57,7 +59,6 @@ export const handler = async (event) => {
 
   const session = await getSession(event);
   if (!session) return err(401, 'unauthorized');
-  if (session.role !== 'admin') return err(403, 'admin only');
 
   if (!process.env.SMARTPOS_KEY_ID || !process.env.SMARTPOS_KEY_SECRET) {
     return err(500, 'SMARTPOS_KEY_ID / SMARTPOS_KEY_SECRET não configuradas');
@@ -65,6 +66,34 @@ export const handler = async (event) => {
 
   const params = new URLSearchParams(event.rawQuery || '');
   const action = params.get('action');
+
+  // Lista enxuta de produtos ativos para o catálogo (cache de 15 min no Redis)
+  if (action === 'products') {
+    const cached = await redis.get(PRODUCTS_CACHE_KEY);
+    if (cached) return ok(cached);
+
+    const products = [];
+    for (let page = 1; page <= 50; page++) {
+      const r = await smartposGet(`/products?page=${page}&size=${PAGE_SIZE}&archived=false`);
+      if (r.status !== 200) return err(502, `SmartPOS respondeu ${r.status}`);
+      const items = r.body?.items ?? [];
+      items.forEach(p => {
+        if (p.isArchived || !p.alphaCode) return;
+        products.push({
+          codigo: String(p.alphaCode).trim(),
+          produto: p.name,
+          custo: p.costValue ?? 0,
+          categoria: (p.category?.description || '').trim(),
+        });
+      });
+      if (items.length < PAGE_SIZE || products.length >= (r.body?.totalRecords ?? 0)) break;
+    }
+
+    await redis.set(PRODUCTS_CACHE_KEY, products, { ex: 15 * 60 });
+    return ok(products);
+  }
+
+  if (session.role !== 'admin') return err(403, 'admin only');
 
   // Diagnóstico: mostra o formato real da resposta para descobrir se o estoque vem junto
   if (action === 'probe') {
